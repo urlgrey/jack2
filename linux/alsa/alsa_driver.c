@@ -466,7 +466,7 @@ alsa_driver_configure_stream (alsa_driver_t *driver, char *device_name,
 "a result of using the \"default\" ALSA device. This is less\n"
 "efficient than it could be. Consider using a hardware device\n"
 "instead rather than using the plug layer. Usually the name of the\n"
-"hardware device that corresponds to the first sound card is hw:0\n"
+"hardware device that corresponds to the first sound card is hw:1\n"
 				);
 			*nchns = 2;
 		}

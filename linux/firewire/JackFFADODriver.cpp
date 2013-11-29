@@ -833,7 +833,7 @@ extern "C"
 
         desc = jack_driver_descriptor_construct("firewire", JackDriverMaster, "Linux FFADO API based audio backend", &filler);
 
-        strcpy(value.str, "hw:0");
+        strcpy(value.str, "hw:1");
         jack_driver_descriptor_add_parameter(
             desc,
             &filler,
@@ -884,7 +884,7 @@ extern "C"
 
         ffado_jack_settings_t cmlparams;
 
-        char *device_name=(char*)"hw:0";
+        char *device_name=(char*)"hw:1";
 
         cmlparams.period_size_set = 0;
         cmlparams.sample_rate_set = 0;

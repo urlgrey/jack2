@@ -620,7 +620,7 @@ sigterm_handler( int signal )
 
 int main (int argc, char *argv[]) {
     char jack_name[30] = "alsa_out";
-    char alsa_device[30] = "hw:0";
+    char alsa_device[30] = "hw:1";
 
     extern char *optarg;
     extern int optind, optopt;

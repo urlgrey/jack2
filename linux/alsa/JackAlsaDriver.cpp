@@ -738,7 +738,7 @@ SERVER_EXPORT const jack_driver_desc_t* driver_get_descriptor ()
 
     desc = jack_driver_descriptor_construct("alsa", JackDriverMaster, "Linux ALSA API based audio backend", &filler);
 
-    strcpy(value.str, "hw:0");
+    strcpy(value.str, "hw:1");
     jack_driver_descriptor_add_parameter(desc, &filler, "device", 'd', JackDriverParamString, &value, enum_alsa_devices(), "ALSA device name", NULL);
 
     strcpy(value.str, "none");
@@ -821,8 +821,8 @@ SERVER_EXPORT Jack::JackDriverClientInterface* driver_initialize(Jack::JackLocke
     jack_nframes_t srate = 48000;
     jack_nframes_t frames_per_interrupt = 1024;
     unsigned long user_nperiods = 2;
-    const char *playback_pcm_name = "hw:0";
-    const char *capture_pcm_name = "hw:0";
+    const char *playback_pcm_name = "hw:1";
+    const char *capture_pcm_name = "hw:1";
     int hw_monitoring = FALSE;
     int hw_metering = FALSE;
     int capture = FALSE;

@@ -57,7 +57,7 @@ namespace Jack
 
         public:
             AudioParam() :
-                    fCardName ( "hw:0" ),
+                    fCardName ( "hw:1" ),
                     fFrequency ( 44100 ),
                     fBuffering ( 512 ),
                     fSoftInputs ( 2 ),
@@ -65,7 +65,7 @@ namespace Jack
             {}
 
             AudioParam ( jack_nframes_t buffer_size, jack_nframes_t sample_rate ) :
-                    fCardName ( "hw:0" ),
+                    fCardName ( "hw:1" ),
                     fFrequency ( sample_rate ),
                     fBuffering ( buffer_size ),
                     fSoftInputs ( 2 ),
