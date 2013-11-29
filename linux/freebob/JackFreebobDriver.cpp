@@ -958,7 +958,7 @@ extern "C"
 
         desc = jack_driver_descriptor_construct("freebob", JackDriverMaster, "Linux FreeBob API based audio backend", &filler);
 
-        strcpy(value.str, "hw:0");
+        strcpy(value.str, "hw:1");
         jack_driver_descriptor_add_parameter(desc, &filler, "device", 'd', JackDriverParamString, &value, NULL, "The FireWire device to use. Format is: 'hw:port[,node]'.", NULL);
 
         value.ui = 1024;
@@ -998,7 +998,7 @@ extern "C"
 
         freebob_jack_settings_t cmlparams;
 
-        const char *device_name = "hw:0";
+        const char *device_name = "hw:1";
 
         cmlparams.period_size_set = 0;
         cmlparams.sample_rate_set = 0;
