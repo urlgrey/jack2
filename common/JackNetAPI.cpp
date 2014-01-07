@@ -1,5 +1,5 @@
 /*
-Copyright (C) 2009-2011 Grame
+Copyright (C) 2009-2013 Grame
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU Lesser General Public License as published by
@@ -84,20 +84,23 @@ extern "C"
 
     typedef int (*JackNetSlaveBufferSizeCallback) (jack_nframes_t nframes, void *arg);
     typedef int (*JackNetSlaveSampleRateCallback) (jack_nframes_t nframes, void *arg);
-    typedef void (*JackNetSlaveShutdownCallback) (void* data);
-    typedef int (*JackNetSlaveRestartCallback) (void* data);
+    typedef void (*JackNetSlaveShutdownCallback) (void* arg);
+    typedef int (*JackNetSlaveRestartCallback) (void* arg);
+    typedef void (*JackNetSlaveErrorCallback) (int error_code, void* arg);
 
     LIB_EXPORT jack_net_slave_t* jack_net_slave_open(const char* ip, int port, const char* name, jack_slave_t* request, jack_master_t* result);
     LIB_EXPORT int jack_net_slave_close(jack_net_slave_t* net);
 
     LIB_EXPORT int jack_net_slave_activate(jack_net_slave_t* net);
     LIB_EXPORT int jack_net_slave_deactivate(jack_net_slave_t* net);
+    LIB_EXPORT int jack_net_slave_is_active(jack_net_slave_t* net);
 
     LIB_EXPORT int jack_set_net_slave_process_callback(jack_net_slave_t* net, JackNetSlaveProcessCallback net_callback, void *arg);
     LIB_EXPORT int jack_set_net_slave_buffer_size_callback(jack_net_slave_t* net, JackNetSlaveBufferSizeCallback bufsize_callback, void *arg);
     LIB_EXPORT int jack_set_net_slave_sample_rate_callback(jack_net_slave_t* net, JackNetSlaveSampleRateCallback samplerate_callback, void *arg);
     LIB_EXPORT int jack_set_net_slave_shutdown_callback(jack_net_slave_t* net, JackNetSlaveShutdownCallback shutdown_callback, void *arg);
     LIB_EXPORT int jack_set_net_slave_restart_callback(jack_net_slave_t* net, JackNetSlaveRestartCallback restart_callback, void *arg);
+    LIB_EXPORT int jack_set_net_slave_error_callback(jack_net_slave_t* net, JackNetSlaveErrorCallback error_callback, void *arg);
 
     // NetJack master API
 
@@ -140,14 +143,9 @@ namespace Jack
 
 struct JackNetExtMaster : public JackNetMasterInterface {
 
-    // Data buffers
-    float** fAudioCaptureBuffer;
-    float** fAudioPlaybackBuffer;
-
-    JackMidiBuffer** fMidiCaptureBuffer;
-    JackMidiBuffer** fMidiPlaybackBuffer;
-
     jack_master_t fRequest;
+    
+    int fPacketTimeOut;
 
     JackNetExtMaster(const char* ip,
                     int port,
@@ -163,10 +161,6 @@ struct JackNetExtMaster : public JackNetMasterInterface {
         fRequest.audio_input = request->audio_input;
         fRequest.audio_output = request->audio_output;
         fRequest.time_out = request->time_out;
-        fAudioCaptureBuffer = NULL;
-        fAudioPlaybackBuffer = NULL;
-        fMidiCaptureBuffer = NULL;
-        fMidiPlaybackBuffer = NULL;
     }
 
     virtual ~JackNetExtMaster()
@@ -329,88 +323,15 @@ struct JackNetExtMaster : public JackNetMasterInterface {
             return -1;
         }
 
-        AllocPorts();
         return 0;
     }
 
     int Close()
     {
         fSocket.Close();
-        FreePorts();
         return 0;
     }
-
-    void AllocPorts()
-    {
-        // Set buffers
-        if (fParams.fSendAudioChannels > 0) {
-            fAudioCaptureBuffer = new float*[fParams.fSendAudioChannels];
-            for (int audio_port_index = 0; audio_port_index < fParams.fSendAudioChannels; audio_port_index++) {
-                fAudioCaptureBuffer[audio_port_index] = new float[fParams.fPeriodSize];
-                fNetAudioCaptureBuffer->SetBuffer(audio_port_index, fAudioCaptureBuffer[audio_port_index]);
-            }
-        }
-
-        if (fParams.fSendMidiChannels > 0) {
-            fMidiCaptureBuffer = new JackMidiBuffer*[fParams.fSendMidiChannels];
-            for (int midi_port_index = 0; midi_port_index < fParams.fSendMidiChannels; midi_port_index++) {
-                fMidiCaptureBuffer[midi_port_index] = (JackMidiBuffer*)new float[fParams.fPeriodSize];
-                fNetMidiCaptureBuffer->SetBuffer(midi_port_index, fMidiCaptureBuffer[midi_port_index]);
-            }
-        }
-
-        if (fParams.fReturnAudioChannels > 0) {
-            fAudioPlaybackBuffer = new float*[fParams.fReturnAudioChannels];
-            for (int audio_port_index = 0; audio_port_index < fParams.fReturnAudioChannels; audio_port_index++) {
-                fAudioPlaybackBuffer[audio_port_index] = new float[fParams.fPeriodSize];
-                fNetAudioPlaybackBuffer->SetBuffer(audio_port_index, fAudioPlaybackBuffer[audio_port_index]);
-            }
-        }
-
-        if (fParams.fReturnMidiChannels > 0) {
-            fMidiPlaybackBuffer = new JackMidiBuffer*[fParams.fReturnMidiChannels];
-            for (int midi_port_index = 0; midi_port_index < fParams.fReturnMidiChannels; midi_port_index++) {
-                fMidiPlaybackBuffer[midi_port_index] = (JackMidiBuffer*)new float[fParams.fPeriodSize];
-                fNetMidiPlaybackBuffer->SetBuffer(midi_port_index, fMidiPlaybackBuffer[midi_port_index]);
-            }
-        }
-    }
-
-    void FreePorts()
-    {
-        if (fAudioPlaybackBuffer) {
-            for (int audio_port_index = 0; audio_port_index < fParams.fSendAudioChannels; audio_port_index++) {
-                delete[] fAudioPlaybackBuffer[audio_port_index];
-            }
-            delete[] fAudioPlaybackBuffer;
-            fAudioPlaybackBuffer = NULL;
-        }
-
-        if (fMidiPlaybackBuffer) {
-            for (int midi_port_index = 0; midi_port_index < fParams.fSendMidiChannels; midi_port_index++) {
-                delete[] (fMidiPlaybackBuffer[midi_port_index]);
-            }
-            delete[] fMidiPlaybackBuffer;
-            fMidiPlaybackBuffer = NULL;
-        }
-
-        if (fAudioCaptureBuffer) {
-            for (int audio_port_index = 0; audio_port_index < fParams.fReturnAudioChannels; audio_port_index++) {
-                delete[] fAudioCaptureBuffer[audio_port_index];
-            }
-            delete[] fAudioCaptureBuffer;
-            fAudioCaptureBuffer = NULL;
-        }
-
-        if (fMidiCaptureBuffer) {
-            for (int midi_port_index = 0; midi_port_index < fParams.fReturnMidiChannels; midi_port_index++) {
-                delete[] fMidiCaptureBuffer[midi_port_index];
-            }
-            delete[] fMidiCaptureBuffer;
-            fMidiCaptureBuffer = NULL;
-        }
-    }
-
+  
     int Read(int audio_input, float** audio_input_buffer, int midi_input, void** midi_input_buffer)
     {
         try {
@@ -429,10 +350,16 @@ struct JackNetExtMaster : public JackNetMasterInterface {
             switch (res) {
             
                 case NET_SYNCHING:
+                    // Data will not be received, so cleanup buffers...
+                    for (int audio_port_index = 0; audio_port_index < audio_input; audio_port_index++) {
+                        memset(audio_input_buffer[audio_port_index], 0, sizeof(float) *  fParams.fPeriodSize);
+                    }
+                    return res;
+                    
                 case SOCKET_ERROR:
                     return res;
                     
-                case NET_PACKET_ERROR:
+                case SYNC_PACKET_ERROR:
                     // since sync packet is incorrect, don't decode it and continue with data
                     break;
                     
@@ -471,7 +398,7 @@ struct JackNetExtMaster : public JackNetMasterInterface {
                 return SOCKET_ERROR;
             }
 
-            //send data
+            // send data
             if (DataSend() == SOCKET_ERROR) {
                 return SOCKET_ERROR;
             }
@@ -495,6 +422,13 @@ struct JackNetExtMaster : public JackNetMasterInterface {
 
 struct JackNetExtSlave : public JackNetSlaveInterface, public JackRunnableInterface {
 
+    // Data buffers
+    float** fAudioCaptureBuffer;
+    float** fAudioPlaybackBuffer;
+
+    JackMidiBuffer** fMidiCaptureBuffer;
+    JackMidiBuffer** fMidiPlaybackBuffer;
+   
     JackThread fThread;
 
     JackNetSlaveProcessCallback fProcessCallback;
@@ -504,7 +438,10 @@ struct JackNetExtSlave : public JackNetSlaveInterface, public JackRunnableInterf
     void* fShutdownArg;
     
     JackNetSlaveRestartCallback fRestartCallback;
-    void*  fRestartArg;
+    void* fRestartArg;
+    
+    JackNetSlaveErrorCallback fErrorCallback;
+    void* fErrorArg;
 
     JackNetSlaveBufferSizeCallback fBufferSizeCallback;
     void* fBufferSizeArg;
@@ -512,15 +449,8 @@ struct JackNetExtSlave : public JackNetSlaveInterface, public JackRunnableInterf
     JackNetSlaveSampleRateCallback fSampleRateCallback;
     void* fSampleRateArg;
 
-    //sample buffers
-    float** fAudioCaptureBuffer;
-    float** fAudioPlaybackBuffer;
-
-    JackMidiBuffer** fMidiCaptureBuffer;
-    JackMidiBuffer** fMidiPlaybackBuffer;
-
     int fConnectTimeOut;
-
+   
     JackNetExtSlave(const char* ip,
                     int port,
                     const char* name,
@@ -529,11 +459,10 @@ struct JackNetExtSlave : public JackNetSlaveInterface, public JackRunnableInterf
         fProcessCallback(NULL),fProcessArg(NULL),
         fShutdownCallback(NULL), fShutdownArg(NULL),
         fRestartCallback(NULL), fRestartArg(NULL),
+        fErrorCallback(NULL), fErrorArg(NULL),
         fBufferSizeCallback(NULL), fBufferSizeArg(NULL),
-        fSampleRateCallback(NULL), fSampleRateArg(NULL),
-        fAudioCaptureBuffer(NULL), fAudioPlaybackBuffer(NULL),
-        fMidiCaptureBuffer(NULL), fMidiPlaybackBuffer(NULL)
-    {
+        fSampleRateCallback(NULL), fSampleRateArg(NULL)
+   {
         char host_name[JACK_CLIENT_NAME_SIZE];
 
         // Request parameters
@@ -559,10 +488,90 @@ struct JackNetExtSlave : public JackNetSlaveInterface, public JackRunnableInterf
         // Set the socket parameters
         fSocket.SetPort(port);
         fSocket.SetAddress(fMulticastIP, port);
+        
+        fAudioCaptureBuffer = NULL;
+        fAudioPlaybackBuffer = NULL;
+        fMidiCaptureBuffer = NULL;
+        fMidiPlaybackBuffer = NULL;
     }
 
     virtual ~JackNetExtSlave()
     {}
+     
+    void AllocPorts()
+    {
+        // Set buffers
+        if (fParams.fSendAudioChannels > 0) {
+            fAudioCaptureBuffer = new float*[fParams.fSendAudioChannels];
+            for (int audio_port_index = 0; audio_port_index < fParams.fSendAudioChannels; audio_port_index++) {
+                fAudioCaptureBuffer[audio_port_index] = new float[fParams.fPeriodSize];
+                memset(fAudioCaptureBuffer[audio_port_index], 0, sizeof(float) * fParams.fPeriodSize);
+                fNetAudioCaptureBuffer->SetBuffer(audio_port_index, fAudioCaptureBuffer[audio_port_index]);
+            }
+        }
+
+        if (fParams.fSendMidiChannels > 0) {
+            fMidiCaptureBuffer = new JackMidiBuffer*[fParams.fSendMidiChannels];
+            for (int midi_port_index = 0; midi_port_index < fParams.fSendMidiChannels; midi_port_index++) {
+                fMidiCaptureBuffer[midi_port_index] = (JackMidiBuffer*)new float[fParams.fPeriodSize];
+                memset(fMidiCaptureBuffer[midi_port_index], 0, sizeof(float) * fParams.fPeriodSize);
+                fNetMidiCaptureBuffer->SetBuffer(midi_port_index, fMidiCaptureBuffer[midi_port_index]);
+            }
+        }
+
+        if (fParams.fReturnAudioChannels > 0) {
+            fAudioPlaybackBuffer = new float*[fParams.fReturnAudioChannels];
+            for (int audio_port_index = 0; audio_port_index < fParams.fReturnAudioChannels; audio_port_index++) {
+                fAudioPlaybackBuffer[audio_port_index] = new float[fParams.fPeriodSize];
+                memset(fAudioPlaybackBuffer[audio_port_index], 0, sizeof(float) * fParams.fPeriodSize);
+                fNetAudioPlaybackBuffer->SetBuffer(audio_port_index, fAudioPlaybackBuffer[audio_port_index]);
+            }
+        }
+
+        if (fParams.fReturnMidiChannels > 0) {
+            fMidiPlaybackBuffer = new JackMidiBuffer*[fParams.fReturnMidiChannels];
+            for (int midi_port_index = 0; midi_port_index < fParams.fReturnMidiChannels; midi_port_index++) {
+                fMidiPlaybackBuffer[midi_port_index] = (JackMidiBuffer*)new float[fParams.fPeriodSize];
+                memset(fMidiPlaybackBuffer[midi_port_index], 0, sizeof(float) * fParams.fPeriodSize);
+                fNetMidiPlaybackBuffer->SetBuffer(midi_port_index, fMidiPlaybackBuffer[midi_port_index]);
+            }
+        }
+    }
+
+    void FreePorts()
+    {
+        if (fAudioCaptureBuffer) {
+            for (int audio_port_index = 0; audio_port_index < fParams.fSendAudioChannels; audio_port_index++) {
+                delete[] fAudioCaptureBuffer[audio_port_index];
+            }
+            delete[] fAudioCaptureBuffer;
+            fAudioCaptureBuffer = NULL;
+        }
+        
+        if (fMidiCaptureBuffer) {
+            for (int midi_port_index = 0; midi_port_index < fParams.fSendMidiChannels; midi_port_index++) {
+                delete[] fMidiCaptureBuffer[midi_port_index];
+            }
+            delete[] fMidiCaptureBuffer;
+            fMidiCaptureBuffer = NULL;
+        }
+        
+        if (fAudioPlaybackBuffer) {
+            for (int audio_port_index = 0; audio_port_index < fParams.fReturnAudioChannels; audio_port_index++) {
+                delete[] fAudioPlaybackBuffer[audio_port_index];
+            }
+            delete[] fAudioPlaybackBuffer;
+            fAudioPlaybackBuffer = NULL;
+        }
+
+        if (fMidiPlaybackBuffer) {
+            for (int midi_port_index = 0; midi_port_index < fParams.fReturnMidiChannels; midi_port_index++) {
+                delete[] (fMidiPlaybackBuffer[midi_port_index]);
+            }
+            delete[] fMidiPlaybackBuffer;
+            fMidiPlaybackBuffer = NULL;
+        }
+    }
 
     int Open(jack_master_t* result)
     {
@@ -677,69 +686,6 @@ struct JackNetExtSlave : public JackNetSlaveInterface, public JackRunnableInterf
         return 0;
     }
 
-    void AllocPorts()
-    {
-        // Set buffers
-        fAudioCaptureBuffer = new float*[fParams.fSendAudioChannels];
-        for (int audio_port_index = 0; audio_port_index < fParams.fSendAudioChannels; audio_port_index++) {
-            fAudioCaptureBuffer[audio_port_index] = new float[fParams.fPeriodSize];
-            fNetAudioCaptureBuffer->SetBuffer(audio_port_index, fAudioCaptureBuffer[audio_port_index]);
-        }
-
-        fMidiCaptureBuffer = new JackMidiBuffer*[fParams.fSendMidiChannels];
-        for (int midi_port_index = 0; midi_port_index < fParams.fSendMidiChannels; midi_port_index++) {
-            fMidiCaptureBuffer[midi_port_index] = (JackMidiBuffer*)new float[fParams.fPeriodSize];
-            fNetMidiCaptureBuffer->SetBuffer(midi_port_index, fMidiCaptureBuffer[midi_port_index]);
-        }
-
-        fAudioPlaybackBuffer = new float*[fParams.fReturnAudioChannels];
-        for (int audio_port_index = 0; audio_port_index < fParams.fReturnAudioChannels; audio_port_index++) {
-            fAudioPlaybackBuffer[audio_port_index] = new float[fParams.fPeriodSize];
-            fNetAudioPlaybackBuffer->SetBuffer(audio_port_index, fAudioPlaybackBuffer[audio_port_index]);
-        }
-
-        fMidiPlaybackBuffer = new JackMidiBuffer*[fParams.fReturnMidiChannels];
-        for (int midi_port_index = 0; midi_port_index < fParams.fReturnMidiChannels; midi_port_index++) {
-            fMidiPlaybackBuffer[midi_port_index] = (JackMidiBuffer*)new float[fParams.fPeriodSize];
-            fNetMidiPlaybackBuffer->SetBuffer(midi_port_index, fMidiPlaybackBuffer[midi_port_index]);
-        }
-    }
-
-    void FreePorts()
-    {
-        if (fAudioCaptureBuffer) {
-            for (int audio_port_index = 0; audio_port_index < fParams.fSendAudioChannels; audio_port_index++) {
-                delete[] fAudioCaptureBuffer[audio_port_index];
-            }
-            delete[] fAudioCaptureBuffer;
-            fAudioCaptureBuffer = NULL;
-        }
-
-        if (fMidiCaptureBuffer) {
-            for (int midi_port_index = 0; midi_port_index < fParams.fSendMidiChannels; midi_port_index++) {
-                delete[] (fMidiCaptureBuffer[midi_port_index]);
-            }
-            delete[] fMidiCaptureBuffer;
-            fMidiCaptureBuffer = NULL;
-        }
-
-        if (fAudioPlaybackBuffer) {
-            for (int audio_port_index = 0; audio_port_index < fParams.fReturnAudioChannels; audio_port_index++) {
-                delete[] fAudioPlaybackBuffer[audio_port_index];
-            }
-            delete[] fAudioPlaybackBuffer;
-            fAudioPlaybackBuffer = NULL;
-        }
-
-        if (fMidiPlaybackBuffer) {
-            for (int midi_port_index = 0; midi_port_index < fParams.fReturnMidiChannels; midi_port_index++) {
-                delete[] fMidiPlaybackBuffer[midi_port_index];
-            }
-            delete[] fMidiPlaybackBuffer;
-            fMidiPlaybackBuffer = NULL;
-        }
-    }
-
     // Transport
     void EncodeTransportData()
     {}
@@ -757,10 +703,21 @@ struct JackNetExtSlave : public JackNetSlaveInterface, public JackRunnableInterf
 
         return (fThread.AcquireSelfRealTime(80) == 0);      // TODO: get a value from the server
     }
+    
+    bool IsRunning()
+    {
+        return (fThread.GetStatus() == JackThread::kRunning);
+    }
 
     bool Execute()
     {
         try  {
+            /*
+                Fist cycle use an INT_MAX time out, so that connection
+                is considered established (with PACKET_TIMEOUT later on)
+                when the first cycle has been done.
+            */
+            DummyProcess();
             // keep running even in case of error
             while (fThread.GetStatus() == JackThread::kRunning) {
                 if (Process() == SOCKET_ERROR) {
@@ -792,8 +749,11 @@ struct JackNetExtSlave : public JackNetSlaveInterface, public JackRunnableInterf
             case SOCKET_ERROR:
                 return SOCKET_ERROR;
                 
-            case NET_PACKET_ERROR:
+            case SYNC_PACKET_ERROR:
                 // since sync packet is incorrect, don't decode it and continue with data
+                if (fErrorCallback) {
+                    fErrorCallback(SYNC_PACKET_ERROR, fErrorArg);
+                }
                 break;
                 
             default:
@@ -802,7 +762,11 @@ struct JackNetExtSlave : public JackNetSlaveInterface, public JackRunnableInterf
                 break;
         }
 
-        return DataRecv();
+        int res = DataRecv();
+        if (res == DATA_PACKET_ERROR && fErrorCallback) {
+            fErrorCallback(DATA_PACKET_ERROR, fErrorArg);
+        }
+        return res;
     }
 
     int Write()
@@ -814,6 +778,18 @@ struct JackNetExtSlave : public JackNetSlaveInterface, public JackRunnableInterf
         }
 
         return DataSend();
+    }
+    
+    void DummyProcess()
+    {
+        // First cycle with INT_MAX time out
+        SetPacketTimeOut(INT_MAX);
+        
+        // One cycle
+        Process();
+        
+        // Then use PACKET_TIMEOUT for next cycles
+        SetPacketTimeOut(PACKET_TIMEOUT);
     }
 
     int Process()
@@ -882,6 +858,17 @@ struct JackNetExtSlave : public JackNetSlaveInterface, public JackRunnableInterf
         } else {
             fRestartCallback = restart_callback;
             fRestartArg = arg;
+            return 0;
+        }
+    }
+    
+    int SetErrorCallback(JackNetSlaveErrorCallback error_callback, void *arg)
+    {
+        if (fThread.GetStatus() == JackThread::kRunning) {
+            return -1;
+        } else {
+            fErrorCallback = error_callback;
+            fErrorArg = arg;
             return 0;
         }
     }
@@ -1021,6 +1008,12 @@ LIB_EXPORT int jack_net_slave_deactivate(jack_net_slave_t* net)
     return slave->Stop();
 }
 
+LIB_EXPORT int jack_net_slave_is_active(jack_net_slave_t* net)
+{
+    JackNetExtSlave* slave = (JackNetExtSlave*)net;
+    return slave->IsRunning();
+}
+
 LIB_EXPORT int jack_set_net_slave_buffer_size_callback(jack_net_slave_t *net, JackNetSlaveBufferSizeCallback bufsize_callback, void *arg)
 {
     JackNetExtSlave* slave = (JackNetExtSlave*)net;
@@ -1043,6 +1036,12 @@ LIB_EXPORT int jack_set_net_slave_restart_callback(jack_net_slave_t *net, JackNe
 {
     JackNetExtSlave* slave = (JackNetExtSlave*)net;
     return slave->SetRestartCallback(restart_callback, arg);
+}
+
+LIB_EXPORT int jack_set_net_slave_error_callback(jack_net_slave_t *net, JackNetSlaveErrorCallback error_callback, void *arg)
+{
+    JackNetExtSlave* slave = (JackNetExtSlave*)net;
+    return slave->SetErrorCallback(error_callback, arg);
 }
 
 // Master API

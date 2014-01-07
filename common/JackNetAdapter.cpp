@@ -52,7 +52,7 @@ namespace Jack
         fParams.fNetworkLatency = 2;
         fParams.fSampleEncoder = JackFloatEncoder;
         fClient = jack_client;
-
+    
         // Possibly use env variable
         const char* default_udp_port = getenv("JACK_NETJACK_PORT");
         udp_port = (default_udp_port) ? atoi(default_udp_port) : DEFAULT_PORT;
@@ -262,10 +262,11 @@ namespace Jack
     {
         try {
             // Keep running even in case of error
-            while (fThread.GetStatus() == JackThread::kRunning)
+            while (fThread.GetStatus() == JackThread::kRunning) {
                 if (Process() == SOCKET_ERROR) {
                     return false;
                 }
+            }
             return false;
         } catch (JackNetException& e) {
             // Otherwise just restart...
@@ -354,7 +355,7 @@ namespace Jack
             case SOCKET_ERROR:
                 return 0;
                 
-            case NET_PACKET_ERROR:
+            case SYNC_PACKET_ERROR:
                 // Since sync packet is incorrect, don't decode it and continue with data
                 break;
                 

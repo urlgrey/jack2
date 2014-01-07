@@ -46,9 +46,12 @@ namespace Jack
     class SERVER_EXPORT JackNetInterface
     {
 
+        friend class JackNetExt;
+        
         protected:
         
             bool fSetTimeOut;
+            int fPacketTimeOut;
 
             void Initialize();
 
@@ -112,6 +115,12 @@ namespace Jack
             int FinishRecv(NetAudioBuffer* buffer);
             
             void SetRcvTimeOut();
+            void SetPacketTimeOut(int time_out)
+            {
+                // New time out
+                fPacketTimeOut = time_out;
+                fSetTimeOut = false;
+            }
 
             NetAudioBuffer* AudioBufferFactory(int nports, char* buffer);
 

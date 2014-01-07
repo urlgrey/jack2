@@ -63,6 +63,7 @@ namespace Jack
         fNetMidiPlaybackBuffer = NULL;
         memset(&fSendTransportData, 0, sizeof(net_transport_data_t));
         memset(&fReturnTransportData, 0, sizeof(net_transport_data_t));
+        fPacketTimeOut = PACKET_TIMEOUT;
     }
 
     void JackNetInterface::FreeNetworkBuffers()
@@ -226,7 +227,7 @@ namespace Jack
     int JackNetInterface::FinishRecv(NetAudioBuffer* buffer)
     {
         buffer->RenderToJackPorts();
-        return NET_PACKET_ERROR;
+        return DATA_PACKET_ERROR;
     }
 
     NetAudioBuffer* JackNetInterface::AudioBufferFactory(int nports, char* buffer)
@@ -255,7 +256,7 @@ namespace Jack
     void JackNetInterface::SetRcvTimeOut()
     {
         if (!fSetTimeOut) {
-            if (fSocket.SetTimeOut(PACKET_TIMEOUT) == SOCKET_ERROR) {
+            if (fSocket.SetTimeOut(fPacketTimeOut) == SOCKET_ERROR) {
                 jack_error("Can't set rx timeout : %s", StrError(NET_ERROR_CODE));
                 return;
             }
@@ -487,7 +488,7 @@ namespace Jack
             jack_error("Wrong packet type : %c", rx_head->fDataType);
             // not the last packet..
             fRxHeader.fIsLastPckt = 0;
-            return NET_PACKET_ERROR;
+            return SYNC_PACKET_ERROR;
         }
     
         fCurrentCycleOffset = fTxHeader.fCycle - rx_head->fCycle;
@@ -854,6 +855,8 @@ namespace Jack
 
     int JackNetSlaveInterface::SyncRecv()
     {
+        SetRcvTimeOut();
+        
         int rx_bytes = 0;
         packet_header_t* rx_head = reinterpret_cast<packet_header_t*>(fRxBuffer);
      
@@ -871,12 +874,10 @@ namespace Jack
             jack_error("Wrong packet type : %c", rx_head->fDataType);
             // not the last packet...
             fRxHeader.fIsLastPckt = 0;
-            return NET_PACKET_ERROR;
+            return SYNC_PACKET_ERROR;
         }
      
         fRxHeader.fIsLastPckt = rx_head->fIsLastPckt;
-        
-        SetRcvTimeOut();
         return rx_bytes;
     }
 
