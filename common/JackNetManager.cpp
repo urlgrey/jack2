@@ -543,7 +543,8 @@ namespace Jack
                 
             default:
                 // Decode sync
-                DecodeSyncPacket();
+                int unused_frames;
+                DecodeSyncPacket(unused_frames);
                 break;
         }
 

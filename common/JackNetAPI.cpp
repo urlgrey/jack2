@@ -63,7 +63,8 @@ extern "C"
         jack_nframes_t buffer_size;
         jack_nframes_t sample_rate;
         char master_name[MASTER_NAME_SIZE];
-        int time_out;                   
+        int time_out;
+        int partial_cycle;                   
 
     } jack_master_t;
 
@@ -112,6 +113,9 @@ extern "C"
     LIB_EXPORT int jack_net_master_recv(jack_net_master_t* net, int audio_input, float** audio_input_buffer, int midi_input, void** midi_input_buffer);
     LIB_EXPORT int jack_net_master_send(jack_net_master_t* net, int audio_output, float** audio_output_buffer, int midi_output, void** midi_output_buffer);
 
+    LIB_EXPORT int jack_net_master_recv_slice(jack_net_master_t* net, int audio_input, float** audio_input_buffer, int midi_input, void** midi_input_buffer, int frames);
+    LIB_EXPORT int jack_net_master_send_slice(jack_net_master_t* net, int audio_output, float** audio_output_buffer, int midi_output, void** midi_output_buffer, int frames);
+
     // NetJack adapter API
 
     typedef struct _jack_adapter jack_adapter_t;
@@ -145,7 +149,7 @@ struct JackNetExtMaster : public JackNetMasterInterface {
 
     jack_master_t fRequest;
     
-    int fPacketTimeOut;
+    JackRingBuffer** fRingBuffer;
 
     JackNetExtMaster(const char* ip,
                     int port,
@@ -161,13 +165,33 @@ struct JackNetExtMaster : public JackNetMasterInterface {
         fRequest.audio_input = request->audio_input;
         fRequest.audio_output = request->audio_output;
         fRequest.time_out = request->time_out;
+        fRequest.partial_cycle = request->partial_cycle;
+        fRingBuffer = NULL;
     }
 
     virtual ~JackNetExtMaster()
-    {}
+    {
+        if (fRingBuffer) {
+            for (int i = 0; i < fParams.fReturnAudioChannels; i++) {
+                delete fRingBuffer[i];
+            }
+            delete [] fRingBuffer;
+        }
+    }
 
     int Open(jack_slave_t* result)
     {
+        // Check buffer_size
+        if (fRequest.buffer_size == 0) {
+            jack_error("Incorrect buffer_size...");
+            return -1;
+        }
+        // Check sample_rate
+        if (fRequest.sample_rate == 0) {
+            jack_error("Incorrect sample_rate...");
+            return -1;
+        }
+                   
         // Init socket API (win32)
         if (SocketAPIInit() < 0) {
             jack_error("Can't init Socket API, exiting...");
@@ -257,6 +281,14 @@ struct JackNetExtMaster : public JackNetMasterInterface {
         result->midi_output = fParams.fReturnMidiChannels;
         result->mtu = fParams.fMtu;
         result->latency = fParams.fNetworkLatency;
+        
+        // Use ringbuffer in case of partial cycle and latency > 0
+        if (fRequest.partial_cycle && result->latency > 0) {
+            fRingBuffer = new JackRingBuffer*[fParams.fReturnAudioChannels];
+            for (int i = 0; i < fParams.fReturnAudioChannels; i++) {
+                fRingBuffer[i] = new JackRingBuffer(fRequest.buffer_size * result->latency * 2);
+            }
+        }
         return 0;
 
     error:
@@ -331,11 +363,26 @@ struct JackNetExtMaster : public JackNetMasterInterface {
         fSocket.Close();
         return 0;
     }
+    
+    void UseRingBuffer(int audio_input, float** audio_input_buffer, int write, int read)
+    {
+        // Possibly use ringbuffer...
+        if (fRingBuffer) {
+            for (int i = 0; i < audio_input; i++) {
+                fRingBuffer[i]->Write(audio_input_buffer[i], write);
+                fRingBuffer[i]->Read(audio_input_buffer[i], read);
+            }
+        }
+    }
   
-    int Read(int audio_input, float** audio_input_buffer, int midi_input, void** midi_input_buffer)
+    int Read(int audio_input, float** audio_input_buffer, int midi_input, void** midi_input_buffer, int frames)
     {
         try {
+            
+            // frames = -1 means : entire buffer
+            if (frames < 0) frames = fParams.fPeriodSize;
            
+            int read_frames = 0;
             assert(audio_input == fParams.fReturnAudioChannels);
 
             for (int audio_port_index = 0; audio_port_index < audio_input; audio_port_index++) {
@@ -346,18 +393,19 @@ struct JackNetExtMaster : public JackNetMasterInterface {
                 fNetMidiPlaybackBuffer->SetBuffer(midi_port_index, ((JackMidiBuffer**)midi_input_buffer)[midi_port_index]);
             }
          
-            int res = SyncRecv();
-            switch (res) {
+            int res1 = SyncRecv();
+            switch (res1) {
             
                 case NET_SYNCHING:
                     // Data will not be received, so cleanup buffers...
                     for (int audio_port_index = 0; audio_port_index < audio_input; audio_port_index++) {
-                        memset(audio_input_buffer[audio_port_index], 0, sizeof(float) *  fParams.fPeriodSize);
+                        memset(audio_input_buffer[audio_port_index], 0, sizeof(float) * fParams.fPeriodSize);
                     }
-                    return res;
+                    UseRingBuffer(audio_input, audio_input_buffer, fParams.fPeriodSize, frames);
+                    return res1;
                     
                 case SOCKET_ERROR:
-                    return res;
+                    return res1;
                     
                 case SYNC_PACKET_ERROR:
                     // since sync packet is incorrect, don't decode it and continue with data
@@ -365,21 +413,26 @@ struct JackNetExtMaster : public JackNetMasterInterface {
                     
                 default:
                     // decode sync
-                    DecodeSyncPacket();
+                    DecodeSyncPacket(read_frames);
                     break;
             }
           
-            return DataRecv();
+            int res2 = DataRecv();
+            UseRingBuffer(audio_input, audio_input_buffer, read_frames, frames);
+            return res2;
 
         } catch (JackNetException& e) {
-            jack_error("Lost connection");
+            jack_error(e.what());
             return -1;
         }
     }
 
-    int Write(int audio_output, float** audio_output_buffer, int midi_output, void** midi_output_buffer)
+    int Write(int audio_output, float** audio_output_buffer, int midi_output, void** midi_output_buffer, int frames)
     {
         try {
+        
+            // frames = -1 means : entire buffer
+            if (frames < 0) frames = fParams.fPeriodSize;
             
             assert(audio_output == fParams.fSendAudioChannels);
 
@@ -391,8 +444,8 @@ struct JackNetExtMaster : public JackNetMasterInterface {
                 fNetMidiCaptureBuffer->SetBuffer(midi_port_index, ((JackMidiBuffer**)midi_output_buffer)[midi_port_index]);
             }
             
-            EncodeSyncPacket();
-
+            EncodeSyncPacket(frames);
+    
             // send sync
             if (SyncSend() == SOCKET_ERROR) {
                 return SOCKET_ERROR;
@@ -402,11 +455,10 @@ struct JackNetExtMaster : public JackNetMasterInterface {
             if (DataSend() == SOCKET_ERROR) {
                 return SOCKET_ERROR;
             }
-            
             return 0;
 
         } catch (JackNetException& e) {
-            jack_error("Lost connection");
+            jack_error(e.what());
             return -1;
         }
     }
@@ -450,6 +502,7 @@ struct JackNetExtSlave : public JackNetSlaveInterface, public JackRunnableInterf
     void* fSampleRateArg;
 
     int fConnectTimeOut;
+    int fFrames;
    
     JackNetExtSlave(const char* ip,
                     int port,
@@ -575,6 +628,21 @@ struct JackNetExtSlave : public JackNetSlaveInterface, public JackRunnableInterf
 
     int Open(jack_master_t* result)
     {
+        // Check audio/midi parameters
+        if (fParams.fSendAudioChannels == 0
+            && fParams.fReturnAudioChannels == 0
+            && fParams.fSendMidiChannels == 0
+            && fParams.fReturnMidiChannels == 0) {
+            jack_error("Incorrect audio/midi channels number...");
+            return -1;
+        }
+        
+        // Check MTU parameters
+        if ((fParams.fMtu < DEFAULT_MTU) && (fParams.fMtu > MAX_MTU)) {
+            jack_error("MTU is not in the expected range [%d ... %d]", DEFAULT_MTU, MAX_MTU);
+            return -1;
+        }
+            
         // Check CELT encoder parameters
         if ((fParams.fSampleEncoder == JackCeltEncoder) && (fParams.fKBps == 0)) {
             jack_error("CELT encoder with 0 for kps...");
@@ -588,7 +656,7 @@ struct JackNetExtSlave : public JackNetSlaveInterface, public JackRunnableInterf
 
         // Check latency
         if (fParams.fNetworkLatency > NETWORK_MAX_LATENCY) {
-            jack_error("Error : network latency is limited to %d", NETWORK_MAX_LATENCY);
+            jack_error("Network latency is limited to %d", NETWORK_MAX_LATENCY);
             return -1;
         }
 
@@ -610,8 +678,8 @@ struct JackNetExtSlave : public JackNetSlaveInterface, public JackRunnableInterf
             return -1;
         }
 
-         // Set result
-         if (result != NULL) {
+        // Set result
+        if (result != NULL) {
             result->buffer_size = fParams.fPeriodSize;
             result->sample_rate = fParams.fSampleRate;
             result->audio_input = fParams.fSendAudioChannels;
@@ -620,7 +688,12 @@ struct JackNetExtSlave : public JackNetSlaveInterface, public JackRunnableInterf
             result->midi_output = fParams.fReturnMidiChannels;
             strcpy(result->master_name, fParams.fMasterNetName);
         }
-
+        
+        // By default fFrames is fPeriodSize
+        fFrames = fParams.fPeriodSize;
+        
+        SessionParamsDisplay(&fParams);
+     
         AllocPorts();
         return 0;
     }
@@ -711,7 +784,7 @@ struct JackNetExtSlave : public JackNetSlaveInterface, public JackRunnableInterf
 
     bool Execute()
     {
-        try  {
+        try {
             /*
                 Fist cycle use an INT_MAX time out, so that connection
                 is considered established (with PACKET_TIMEOUT later on)
@@ -758,7 +831,7 @@ struct JackNetExtSlave : public JackNetSlaveInterface, public JackRunnableInterf
                 
             default:
                 // decode sync
-                DecodeSyncPacket();
+                DecodeSyncPacket(fFrames);
                 break;
         }
 
@@ -768,11 +841,11 @@ struct JackNetExtSlave : public JackNetSlaveInterface, public JackRunnableInterf
         }
         return res;
     }
-
+    
     int Write()
     {
-        EncodeSyncPacket();
-
+        EncodeSyncPacket(fFrames);
+      
         if (SyncSend() == SOCKET_ERROR) {
             return SOCKET_ERROR;
         }
@@ -798,8 +871,10 @@ struct JackNetExtSlave : public JackNetSlaveInterface, public JackRunnableInterf
         if (Read() == SOCKET_ERROR) {
             return SOCKET_ERROR;
         }
-
-        fProcessCallback(fParams.fPeriodSize,
+        
+        if (fFrames < 0) fFrames = fParams.fPeriodSize;
+        
+        fProcessCallback(fFrames,
                         fParams.fSendAudioChannels,
                         fAudioCaptureBuffer,
                         fParams.fSendMidiChannels,
@@ -809,7 +884,7 @@ struct JackNetExtSlave : public JackNetSlaveInterface, public JackRunnableInterf
                         fParams.fReturnMidiChannels,
                         (void**)fMidiPlaybackBuffer,
                         fProcessArg);
-
+       
         // Then write data to network, throw JackNetException in case of network error...
         if (Write() == SOCKET_ERROR) {
             return SOCKET_ERROR;
@@ -1068,13 +1143,25 @@ LIB_EXPORT int jack_net_master_close(jack_net_master_t* net)
 LIB_EXPORT int jack_net_master_recv(jack_net_master_t* net, int audio_input, float** audio_input_buffer, int midi_input, void** midi_input_buffer)
 {
     JackNetExtMaster* master = (JackNetExtMaster*)net;
-    return master->Read(audio_input, audio_input_buffer, midi_input, midi_input_buffer);
+    return master->Read(audio_input, audio_input_buffer, midi_input, midi_input_buffer, -1);
 }
 
 LIB_EXPORT int jack_net_master_send(jack_net_master_t* net, int audio_output, float** audio_output_buffer, int midi_output, void** midi_output_buffer)
 {
     JackNetExtMaster* master = (JackNetExtMaster*)net;
-    return master->Write(audio_output, audio_output_buffer, midi_output, midi_output_buffer);
+    return master->Write(audio_output, audio_output_buffer, midi_output, midi_output_buffer, -1);
+}
+
+LIB_EXPORT int jack_net_master_recv_slice(jack_net_master_t* net, int audio_input, float** audio_input_buffer, int midi_input, void** midi_input_buffer, int frames)
+{
+    JackNetExtMaster* master = (JackNetExtMaster*)net;
+    return master->Read(audio_input, audio_input_buffer, midi_input, midi_input_buffer, frames);
+}
+
+LIB_EXPORT int jack_net_master_send_slice(jack_net_master_t* net, int audio_output, float** audio_output_buffer, int midi_output, void** midi_output_buffer, int frames)
+{
+    JackNetExtMaster* master = (JackNetExtMaster*)net;
+    return master->Write(audio_output, audio_output_buffer, midi_output, midi_output_buffer, frames);
 }
 
 // Adapter API

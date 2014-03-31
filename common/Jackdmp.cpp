@@ -33,6 +33,9 @@ Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 #include "control.h"
 #include "JackConstants.h"
 #include "JackPlatformPlug.h"
+#ifdef __ANDROID__
+#include "JackControlAPIAndroid.h"
+#endif
 
 #if defined(JACK_DBUS) && defined(__linux__)
 #include <dbus/dbus.h>
@@ -87,7 +90,7 @@ static void copyright(FILE* file)
 {
     fprintf(file, "jackdmp " VERSION "\n"
             "Copyright 2001-2005 Paul Davis and others.\n"
-            "Copyright 2004-2013 Grame.\n"
+            "Copyright 2004-2014 Grame.\n"
             "jackdmp comes with ABSOLUTELY NO WARRANTY\n"
             "This is free software, and you are welcome to redistribute it\n"
             "under certain conditions; see the file COPYING for details\n");
@@ -133,6 +136,25 @@ static jackctl_parameter_t * jackctl_get_parameter(const JSList * parameters_lis
     return NULL;
 }
 
+#ifdef __ANDROID__
+static void jackctl_server_switch_master_dummy(jackctl_server_t * server_ctl, char * master_driver_name)
+{
+    static bool is_dummy_driver = false;
+    if(!strcmp(master_driver_name, "dummy")) {
+        return;
+    }
+    jackctl_driver_t * driver_ctr;
+    if(is_dummy_driver) {
+        is_dummy_driver = false;
+        driver_ctr = jackctl_server_get_driver(server_ctl, master_driver_name);
+    } else {
+        is_dummy_driver = true;
+        driver_ctr = jackctl_server_get_driver(server_ctl, "dummy");
+    }
+    jackctl_server_switch_master(server_ctl, driver_ctr);
+}
+#endif
+
 static void print_server_drivers(jackctl_server_t *server, FILE* file)
 {
     const JSList * node_ptr = jackctl_server_get_drivers_list(server);
@@ -161,8 +183,13 @@ static void print_server_internals(jackctl_server_t *server, FILE* file)
     fprintf(file, "\n");
 }
 
-static void usage(FILE* file, jackctl_server_t *server)
+static void usage(FILE* file, jackctl_server_t *server, bool full = true)
 {
+    jackctl_parameter_t * param;
+    const JSList * server_parameters;
+    uint32_t i;
+    union jackctl_parameter_value value;
+
     fprintf(file, "\n"
             "Usage: jackdmp [ --no-realtime OR -r ]\n"
             "               [ --realtime OR -R [ --realtime-priority OR -P priority ] ]\n"
@@ -175,8 +202,26 @@ static void usage(FILE* file, jackctl_server_t *server)
             "               [ --internal-client OR -I internal-client-name ]\n"
             "               [ --verbose OR -v ]\n"
 #ifdef __linux__
-            "               [ --clocksource OR -c [ c(ycle) | h(pet) | s(ystem) ]\n"
+            "               [ --clocksource OR -c [ h(pet) | s(ystem) ]\n"
 #endif
+            "               [ --autoconnect OR -a <modechar>]\n");
+
+    server_parameters = jackctl_server_get_parameters(server);
+    param = jackctl_get_parameter(server_parameters, "self-connect-mode");
+    fprintf(file,
+            "                 where <modechar> is one of:\n");
+    for (i = 0; i < jackctl_parameter_get_enum_constraints_count(param); i++)
+    {
+        value = jackctl_parameter_get_enum_constraint_value(param, i);
+        fprintf(file, "                   '%c' - %s", value.c, jackctl_parameter_get_enum_constraint_description(param, i));
+        if (value.c == JACK_DEFAULT_SELF_CONNECT_MODE)
+        {
+            fprintf(file, " (default)");
+        }
+        fprintf(file, "\n");
+    }
+
+    fprintf(file,
             "               [ --replace-registry ]\n"
             "               [ --silent OR -s ]\n"
             "               [ --sync OR -S ]\n"
@@ -186,7 +231,7 @@ static void usage(FILE* file, jackctl_server_t *server)
             "       jackdmp -d master-backend-name --help\n"
             "             to display options for each master backend\n\n");
     
-    if (server) {
+    if (full) {
         print_server_drivers(server, file);
         print_server_internals(server, file);
     }
@@ -284,13 +329,17 @@ int main(int argc, char** argv)
                         value.ui = JACK_TIMER_HPET;
                         jackctl_parameter_set_value(param, &value);
                     } else if (tolower (optarg[0]) == 'c') {
-                        value.ui = JACK_TIMER_CYCLE_COUNTER;
+                        /* For backwards compatibility with scripts, allow
+                         * the user to request the cycle clock on the
+                         * command line, but use the system clock instead
+                         */
+                        value.ui = JACK_TIMER_SYSTEM_CLOCK;
                         jackctl_parameter_set_value(param, &value);
                     } else if (tolower (optarg[0]) == 's') {
                         value.ui = JACK_TIMER_SYSTEM_CLOCK;
                         jackctl_parameter_set_value(param, &value);
                     } else {
-                        usage(stdout, NULL);
+                        usage(stdout, server_ctl);
                         goto destroy_server;
                     }
                 }
@@ -311,7 +360,7 @@ int main(int argc, char** argv)
                         value.c = optarg[0];
                         jackctl_parameter_set_value(param, &value);
                     } else {
-                        usage(stdout, NULL);
+                        usage(stdout, server_ctl);
                         goto destroy_server;
                     }
                 }
@@ -446,7 +495,7 @@ int main(int argc, char** argv)
     }
 
     if (!master_driver_name) {
-        usage(stderr, NULL);
+        usage(stderr, server_ctl, false);
         goto destroy_server;
     }
 
@@ -556,7 +605,19 @@ int main(int argc, char** argv)
     return_value = 0;
 
     // Waits for signal
+#ifdef __ANDROID__
+    //reserve SIGUSR2 signal for switching master driver
+    while(1) {
+        int signal = jackctl_wait_signals_and_return(sigmask);
+        if (signal == SIGUSR2) {
+            jackctl_server_switch_master_dummy(server_ctl, master_driver_name);
+        } else {
+            break;
+        }
+    }
+#else
     jackctl_wait_signals(sigmask);
+#endif
 
  stop_server:
     if (!jackctl_server_stop(server_ctl)) {

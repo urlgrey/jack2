@@ -45,7 +45,9 @@
 #define PORT_NUM 2048
 #endif
 
+#ifndef PORT_NUM_MAX
 #define PORT_NUM_MAX 4096           // The "max" value for ports used in connection manager, although port number in graph manager is dynamic
+#endif
 
 #define DRIVER_PORT_NUM 256
 
@@ -82,6 +84,6 @@
 #define EMPTY   0xFFFD
 #define FREE	0xFFFC
 
-#define JACK_DEFAULT_SELF_CONNECT_MODE JackSelfConnectIgnoreAll
+#define JACK_DEFAULT_SELF_CONNECT_MODE ' ' /* allow all requests */
 
 #endif

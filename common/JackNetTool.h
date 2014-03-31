@@ -38,7 +38,7 @@ using namespace std;
 #endif
 #endif
 
-#define NETWORK_PROTOCOL 7
+#define NETWORK_PROTOCOL 8
 
 #define NET_SYNCHING      0
 #define SYNC_PACKET_ERROR -2
@@ -172,14 +172,15 @@ namespace Jack
     struct _packet_header
     {
         char fPacketType[8];        //packet type ('headr')
-        uint32_t fDataType;         //a for audio, m for midi and s for sync
-        uint32_t fDataStream;       //s for send, r for return
+        uint32_t fDataType;         //'a' for audio, 'm' for midi and 's' for sync
+        uint32_t fDataStream;       //'s' for send, 'r' for return
         uint32_t fID;               //unique ID of the slave
         uint32_t fNumPacket;        //number of data packets of the cycle
         uint32_t fPacketSize;       //packet size in bytes
         uint32_t fActivePorts;      //number of active ports
         uint32_t fCycle;            //process cycle counter
         uint32_t fSubCycle;         //midi/audio subcycle counter
+        int32_t fFrames;            //process cycle size in frames (can be -1 to indicate entire buffer)
         uint32_t fIsLastPckt;       //is it the last packet of a given cycle ('y' or 'n')
     } POST_PACKED_STRUCTURE;
 
@@ -319,8 +320,8 @@ namespace Jack
             virtual sample_t* GetBuffer(int index);
 
             //jack<->buffer
-            virtual int RenderFromJackPorts();
-            virtual void RenderToJackPorts();
+            virtual int RenderFromJackPorts(int nframes);
+            virtual void RenderToJackPorts(int nframes);
 
             //network<->buffer
             virtual int RenderFromNetwork(int cycle, int sub_cycle, uint32_t port_num) = 0;
@@ -375,10 +376,9 @@ namespace Jack
             CELTDecoder** fCeltDecoder;
 
             int fCompressedSizeByte;
+            unsigned char** fCompressedBuffer;
    
             size_t fLastSubPeriodBytesSize;
-
-            unsigned char** fCompressedBuffer;
 
             void FreeCelt();
 
@@ -395,12 +395,12 @@ namespace Jack
             int GetNumPackets(int active_ports);
 
             //jack<->buffer
-            int RenderFromJackPorts();
-            void RenderToJackPorts();
+            int RenderFromJackPorts(int nframes);
+            void RenderToJackPorts(int nframes);
 
             //network<->buffer
             int RenderFromNetwork(int cycle, int sub_cycle, uint32_t port_num);
-            int RenderToNetwork(int sub_cycle, uint32_t  port_num);
+            int RenderToNetwork(int sub_cycle, uint32_t port_num);
     };
 
 #endif
@@ -418,8 +418,8 @@ namespace Jack
             OpusCustomEncoder** fOpusEncoder;
             OpusCustomDecoder** fOpusDecoder;
 
-            unsigned short *fCompressedSizesByte;
             int fCompressedMaxSizeByte;
+            unsigned short* fCompressedSizesByte;
    
             size_t fLastSubPeriodBytesSize;
 
@@ -439,8 +439,8 @@ namespace Jack
             int GetNumPackets(int active_ports);
 
             //jack<->buffer
-            int RenderFromJackPorts();
-            void RenderToJackPorts();
+            int RenderFromJackPorts(int nframes);
+            void RenderToJackPorts(int nframes);
 
             //network<->buffer
             int RenderFromNetwork(int cycle, int sub_cycle, uint32_t port_num);
@@ -472,8 +472,8 @@ namespace Jack
             int GetNumPackets(int active_ports);
 
             //jack<->buffer
-            int RenderFromJackPorts();
-            void RenderToJackPorts();
+            int RenderFromJackPorts(int nframes);
+            void RenderToJackPorts(int nframes);
 
             //network<->buffer
             int RenderFromNetwork(int cycle, int sub_cycle, uint32_t port_num);
